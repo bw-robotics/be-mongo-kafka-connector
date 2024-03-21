@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 import org.bson.BsonDocument;
 
 import com.mongodb.kafka.connect.source.MongoSourceConfig;
-import com.mongodb.kafka.connect.util.JsonFieldNotPresentException;
 
 public class CustomDataTypeTopicMapper implements TopicMapper {
 
@@ -40,38 +39,45 @@ public class CustomDataTypeTopicMapper implements TopicMapper {
 
   @Override
   public String getTopic(final BsonDocument changeStreamDocument) {
-    try {
-      validateJsonFields(changeStreamDocument);
-    } catch (JsonFieldNotPresentException e) {
-      LOGGER.error("Exception occurred while trying to validate JSON fields", e);
-      return dlqTopicName;
-    }
+  final boolean isValidJsonFields = isValidJsonFields(changeStreamDocument);
+
+  if (!isValidJsonFields) {
+    LOGGER.error("Json fields are not valid in document: {}", changeStreamDocument);
+    return dlqTopicName;
+  }
 
     try {
       final BsonDocument fullDocument = changeStreamDocument.get(FULL_DOCUMENT_FIELD).asDocument();
 
       if (!fullDocument.containsKey(DATA_TYPE_FIELD)) {
-        return String.join("", prefix, database, separator, collection, suffix);
+        return getTopicName();
       }
 
       final String dataType = fullDocument.get(DATA_TYPE_FIELD).asString().getValue();
-
-      return String.join("", prefix, database, separator, collection, separator, dataType, suffix);
-
+      return getTopicName(dataType);
     } catch (Exception e) {
       LOGGER.error("Exception occurred while trying to get topic name", e);
       return dlqTopicName;
     }
   }
 
-  private void validateJsonFields(final BsonDocument changeStreamDocument)
-      throws JsonFieldNotPresentException {
+  private boolean isValidJsonFields(final BsonDocument changeStreamDocument) {
     if (!changeStreamDocument.containsKey(OPERATION_TYPE_FIELD)) {
-      throw new JsonFieldNotPresentException(OPERATION_TYPE_FIELD + " not present");
+      return false;
     }
 
     if (!changeStreamDocument.containsKey(FULL_DOCUMENT_FIELD)) {
-      throw new JsonFieldNotPresentException(FULL_DOCUMENT_FIELD + " not present");
+      return false;
     }
+
+    return true;
+  }
+
+  private String getTopicName() {
+      return String.join("", prefix, database, separator, collection, suffix);
+  }
+
+  private String getTopicName(final String dataType) {
+      return String.join("", prefix, database, separator, collection, separator, dataType, suffix);
   }
 }
