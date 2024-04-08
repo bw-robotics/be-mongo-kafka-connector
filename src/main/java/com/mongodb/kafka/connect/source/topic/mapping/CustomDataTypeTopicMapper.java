@@ -16,7 +16,7 @@ public class CustomDataTypeTopicMapper implements TopicMapper {
   public static final String OPERATION_TYPE_FIELD = "operationType";
   public static final String FULL_DOCUMENT_FIELD = "fullDocument";
   public static final String DATA_TYPE_FIELD = "dataType";
-  public static final String NS_FIELD = "ns";
+  public static final String NAMESPACE_FIELD = "ns";
   public static final String COLLECTION_FIELD = "coll";
   public static final String UPDATED_DESCRIPTION_FIELD = "updateDescription";
   public static final String INSERT_OPERATION_TYPE = "insert";
@@ -49,7 +49,7 @@ public class CustomDataTypeTopicMapper implements TopicMapper {
     }
 
     try {
-      final BsonDocument nsDocument = changeStreamDocument.get(NS_FIELD).asDocument();
+      final BsonDocument nsDocument = changeStreamDocument.get(NAMESPACE_FIELD).asDocument();
       final String collection = nsDocument.get(COLLECTION_FIELD).asString().getValue();
       final String operationType =
           changeStreamDocument.get(OPERATION_TYPE_FIELD).asString().getValue();
@@ -84,7 +84,7 @@ public class CustomDataTypeTopicMapper implements TopicMapper {
       return false;
     }
 
-    if (!changeStreamDocument.containsKey(NS_FIELD)) {
+    if (!changeStreamDocument.containsKey(NAMESPACE_FIELD)) {
       return false;
     }
 
