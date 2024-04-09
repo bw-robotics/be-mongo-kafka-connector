@@ -46,7 +46,7 @@ public class CustomDataTypeTopicMapper implements TopicMapper {
    * we don't have any other operation type:
    * 1. Event
    * 2. Command
-   * In the future, event if we do update operations on top of these collections, dataType of the documents will never
+   * In the future, even if we do update operations on top of these collections, dataType of the documents will never
    * be changed, so we will be safe.
    * @param changeStreamDocument A document produced by a MongoDB change stream with accordance to
    *     the <a
