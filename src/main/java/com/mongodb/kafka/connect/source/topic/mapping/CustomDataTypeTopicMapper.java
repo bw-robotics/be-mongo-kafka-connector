@@ -40,18 +40,18 @@ public class CustomDataTypeTopicMapper implements TopicMapper {
   }
 
   /**
-   * Dynamically builds and returns the topic name from changeStreamDocument param.
-   * In the case of operationType=INSERT, DATA_TYPE_FIELD field is located in the FULL_DOCUMENT_FIELD of the Document.
-   * We are doing this only for operationType=INSERT and for other operation types, we will send data to topics without dataType included.
-   * In the future, if we decide to do update operations on top of these collections, dataType of the documents will never
-   * be changed, and we will send data to topics without dataType included.
+   * Dynamically builds and returns the topic name from changeStreamDocument param. In the case of
+   * operationType=INSERT and when DATA_TYPE_FIELD field is located in the FULL_DOCUMENT_FIELD of the
+   * Document, we will create a topic name that includes the dataType value. In the future, if we decide to do update
+   * operations on top of these collections, dataType of the documents will never be changed, and we
+   * will send data to topics without dataType included.
+   *
    * @param changeStreamDocument A document produced by a MongoDB change stream with accordance to
    *     the <a
    *     href="https://www.mongodb.com/docs/kafka-connector/current/source-connector/configuration-properties/change-stream/">
    *     change stream configuration</a> and the <a
    *     href="https://www.mongodb.com/docs/kafka-connector/current/source-connector/configuration-properties/startup/">startup
    *     configuration</a>.
-   *
    * @return
    */
   @Override
