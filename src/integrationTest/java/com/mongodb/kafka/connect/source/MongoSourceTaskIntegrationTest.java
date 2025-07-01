@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -45,6 +46,7 @@ import static org.mockito.Mockito.when;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -169,6 +171,9 @@ public class MongoSourceTaskIntegrationTest extends MongoKafkaTestCase {
           new HashMap<String, String>() {
             {
               put(MongoSourceConfig.STARTUP_MODE_CONFIG, StartupMode.COPY_EXISTING.propertyValue());
+              String namespaceRegex =
+                  String.format("(%s\\.coll|%s\\.coll)", db1.getName(), db2.getName());
+              put(MongoSourceConfig.COPY_EXISTING_NAMESPACE_REGEX_CONFIG, namespaceRegex);
             }
           };
       task.start(cfg);
@@ -178,11 +183,22 @@ public class MongoSourceTaskIntegrationTest extends MongoKafkaTestCase {
           () -> assertEquals(150, firstPoll.size()),
           () -> assertSourceRecordValues(createInserts(1, 75), firstPoll, coll1),
           () -> assertSourceRecordValues(createInserts(1, 75), firstPoll, coll2),
+          // make sure all elements, except the last, contains the "copy" key
           () ->
               assertTrue(
                   firstPoll.stream()
                       .map(SourceRecord::sourceOffset)
-                      .allMatch(i -> i.containsKey("copy"))));
+                      .limit(150 - 1) // exclude the last record
+                      .allMatch(i -> i.containsKey("copy"))),
+          // make sure that the last copied element does not have the "copy" key
+          () ->
+              assertTrue(
+                  firstPoll.stream()
+                      .map(SourceRecord::sourceOffset)
+                      .skip(150 - 1) // exclude the last record
+                      .findFirst()
+                      .filter(i -> !i.containsKey("copy"))
+                      .isPresent()));
 
       assertNull(task.poll());
 
@@ -533,6 +549,7 @@ public class MongoSourceTaskIntegrationTest extends MongoKafkaTestCase {
   @Test
   @DisplayName("Copy existing with a restart midway through")
   void testCopyingExistingWithARestartMidwayThrough() {
+    assumeTrue(isGreaterThanThreeDotSix());
     try (AutoCloseableSourceTask task = createSourceTask()) {
 
       MongoCollection<Document> coll = getCollection();
@@ -544,7 +561,7 @@ public class MongoSourceTaskIntegrationTest extends MongoKafkaTestCase {
               put(MongoSourceConfig.COLLECTION_CONFIG, coll.getNamespace().getCollectionName());
               put(MongoSourceConfig.STARTUP_MODE_CONFIG, StartupMode.COPY_EXISTING.propertyValue());
               put(MongoSourceConfig.POLL_MAX_BATCH_SIZE_CONFIG, "25");
-              put(MongoSourceConfig.POLL_AWAIT_TIME_MS_CONFIG, "10000");
+              put(MongoSourceConfig.POLL_AWAIT_TIME_MS_CONFIG, "1000");
             }
           };
 
@@ -556,6 +573,17 @@ public class MongoSourceTaskIntegrationTest extends MongoKafkaTestCase {
       assertTrue(
           firstPoll.stream().map(SourceRecord::sourceOffset).allMatch(i -> i.containsKey("copy")));
 
+      Map<String, ?> lastOffset = firstPoll.get(25 - 1).sourceOffset();
+
+      // mock the context so that on restart we know where the last task left off
+      when(context.offsetStorageReader()).thenReturn(offsetStorageReader);
+      assertNotNull(lastOffset.get("_id")); // check to make sure the value is an Object
+      @SuppressWarnings("unchecked")
+      Map<String, Object> mockedOffset = (Map<String, Object>) lastOffset;
+      when(offsetStorageReader.offset(any())).thenReturn(mockedOffset);
+      task.initialize(context);
+
+      // perform a restart
       task.stop();
       task.start(cfg);
 
@@ -566,8 +594,20 @@ public class MongoSourceTaskIntegrationTest extends MongoKafkaTestCase {
 
       List<SourceRecord> thirdPoll = getNextBatch(task);
       assertSourceRecordValues(createInserts(26, 50), thirdPoll, coll);
+      // Make sure all elements, except the last one, contains the "copy" key
       assertTrue(
-          thirdPoll.stream().map(SourceRecord::sourceOffset).allMatch(i -> i.containsKey("copy")));
+          thirdPoll.stream()
+              .map(SourceRecord::sourceOffset)
+              .limit(25 - 1) // exclude the last record in the batch
+              .allMatch(i -> i.containsKey("copy")));
+      // Make sure the last copied element does not contain the "copy" key
+      assertTrue(
+          thirdPoll.stream()
+              .map(SourceRecord::sourceOffset)
+              .skip(25 - 1) // exclude the last record in the batch
+              .findFirst()
+              .filter(i -> !i.containsKey("copy"))
+              .isPresent());
 
       assertTrue(getNextBatch(task).isEmpty());
       insertMany(rangeClosed(51, 75), coll);
@@ -576,6 +616,72 @@ public class MongoSourceTaskIntegrationTest extends MongoKafkaTestCase {
       assertSourceRecordValues(createInserts(51, 75), fourthPoll, coll);
       assertFalse(
           fourthPoll.stream().map(SourceRecord::sourceOffset).anyMatch(i -> i.containsKey("copy")));
+    }
+  }
+
+  @Test
+  @DisplayName("Copy existing with a restart after finishing")
+  void testCopyingExistingWithARestartAfterFinishing() {
+    assumeTrue(isGreaterThanThreeDotSix());
+    try (AutoCloseableSourceTask task = createSourceTask()) {
+
+      MongoCollection<Document> coll = getCollection();
+
+      HashMap<String, String> cfg =
+          new HashMap<String, String>() {
+            {
+              put(MongoSourceConfig.DATABASE_CONFIG, coll.getNamespace().getDatabaseName());
+              put(MongoSourceConfig.COLLECTION_CONFIG, coll.getNamespace().getCollectionName());
+              put(MongoSourceConfig.STARTUP_MODE_CONFIG, StartupMode.COPY_EXISTING.propertyValue());
+              put(MongoSourceConfig.POLL_MAX_BATCH_SIZE_CONFIG, "25");
+              put(MongoSourceConfig.POLL_AWAIT_TIME_MS_CONFIG, "1000");
+            }
+          };
+
+      insertMany(rangeClosed(1, 50), coll);
+      task.start(cfg);
+
+      List<SourceRecord> firstPoll = getNextBatch(task);
+      assertSourceRecordValues(createInserts(1, 25), firstPoll, coll);
+      assertTrue(
+          firstPoll.stream().map(SourceRecord::sourceOffset).allMatch(i -> i.containsKey("copy")));
+
+      List<SourceRecord> secondPoll = getNextBatch(task);
+      assertSourceRecordValues(createInserts(26, 50), secondPoll, coll);
+      // Make sure all elements, except the last one, contains the "copy" key
+      assertTrue(
+          secondPoll.stream()
+              .map(SourceRecord::sourceOffset)
+              .limit(25 - 1) // exclude the last record in the batch
+              .allMatch(i -> i.containsKey("copy")));
+
+      Map<String, ?> lastOffset = secondPoll.get(25 - 1).sourceOffset();
+
+      // Make sure the last copied element does not contain the "copy" key
+      assertFalse(lastOffset.containsKey("copy"));
+
+      // mock the context so that on restart we know where the last task left off
+      when(context.offsetStorageReader()).thenReturn(offsetStorageReader);
+      assertNotNull(lastOffset.get("_id")); // check to make sure the value is an Object
+      @SuppressWarnings("unchecked")
+      Map<String, Object> mockedOffset = (Map<String, Object>) lastOffset;
+      when(offsetStorageReader.offset(any())).thenReturn(mockedOffset);
+      task.initialize(context);
+
+      // perform a restart
+      task.stop();
+      task.start(cfg);
+
+      // make sure that a copy doesn't occur again because all data was already copied
+      assertTrue(getNextBatch(task).isEmpty());
+
+      // make sure that we can continue to process data
+      insertMany(rangeClosed(51, 75), coll);
+
+      List<SourceRecord> thirdPoll = getNextBatch(task);
+      assertSourceRecordValues(createInserts(51, 75), thirdPoll, coll);
+      assertFalse(
+          thirdPoll.stream().map(SourceRecord::sourceOffset).anyMatch(i -> i.containsKey("copy")));
     }
   }
 
@@ -943,6 +1049,144 @@ public class MongoSourceTaskIntegrationTest extends MongoKafkaTestCase {
       Struct delete = (Struct) records.get(1).value();
       assertEquals(OperationType.DELETE.getValue(), delete.getString("operationType"));
       assertEquals(expected.toJson(), delete.getString("fullDocumentBeforeChange"));
+    } finally {
+      db.drop();
+    }
+  }
+
+  @Test
+  @DisplayName("Ensure disambiguatedPaths exist when showExpandedEvents is true")
+  void testDisambiguatedPathsExistWhenShowExpandedEventsIsTrue() {
+    assumeTrue(isAtLeastSevenDotZero());
+    MongoDatabase db = getDatabaseWithPostfix();
+    try (AutoCloseableSourceTask task = createSourceTask()) {
+      MongoCollection<Document> coll = db.getCollection("coll");
+      coll.drop();
+      db.createCollection(coll.getNamespace().getCollectionName(), new CreateCollectionOptions());
+      HashMap<String, String> cfg = new HashMap<>();
+      cfg.put(
+          MongoSourceConfig.OUTPUT_FORMAT_VALUE_CONFIG,
+          OutputFormat.SCHEMA.name().toLowerCase(Locale.ROOT));
+      cfg.put(MongoSourceConfig.SHOW_EXPANDED_EVENTS_CONFIG, "true");
+      task.start(cfg);
+      int id = 0;
+      Document expected = new Document("_id", id);
+      coll.insertOne(expected);
+      coll.updateOne(Filters.eq(id), Document.parse("{ $set: { foo: 1 } }"));
+      coll.deleteOne(Filters.eq(id));
+      List<SourceRecord> records = getNextResults(task);
+      assertEquals(3, records.size());
+      Struct update = (Struct) records.get(1).value();
+      assertEquals(OperationType.UPDATE.getValue(), update.getString("operationType"));
+      Struct updateDescription = (Struct) update.get("updateDescription");
+      assertEquals("{}", updateDescription.getString("disambiguatedPaths"));
+    } finally {
+      db.drop();
+    }
+  }
+
+  @Test
+  @DisplayName("Ensure disambiguatedPaths don't exist when showExpandedEvents is false")
+  void testDisambiguatedPathsDontExistWhenShowExpandedEventsIsTrue() {
+    assumeTrue(isAtLeastSevenDotZero());
+    MongoDatabase db = getDatabaseWithPostfix();
+    try (AutoCloseableSourceTask task = createSourceTask()) {
+      MongoCollection<Document> coll = db.getCollection("coll");
+      coll.drop();
+      db.createCollection(coll.getNamespace().getCollectionName(), new CreateCollectionOptions());
+      HashMap<String, String> cfg = new HashMap<>();
+      cfg.put(
+          MongoSourceConfig.OUTPUT_FORMAT_VALUE_CONFIG,
+          OutputFormat.SCHEMA.name().toLowerCase(Locale.ROOT));
+      cfg.put(MongoSourceConfig.SHOW_EXPANDED_EVENTS_CONFIG, "false");
+      task.start(cfg);
+      int id = 0;
+      Document expected = new Document("_id", id);
+      coll.insertOne(expected);
+      coll.updateOne(Filters.eq(id), Document.parse("{ $set: { foo: 1 } }"));
+      coll.deleteOne(Filters.eq(id));
+      List<SourceRecord> records = getNextResults(task);
+      assertEquals(3, records.size());
+      Struct update = (Struct) records.get(1).value();
+      assertEquals(OperationType.UPDATE.getValue(), update.getString("operationType"));
+      Struct updateDescription = (Struct) update.get("updateDescription");
+      assertNull(updateDescription.getString("disambiguatedPaths"));
+    } finally {
+      db.drop();
+    }
+  }
+
+  @Test
+  @DisplayName("Ensure disambiguatedPaths don't exist by default")
+  void testDisambiguatedPathsDontExistByDefault() {
+    assumeTrue(isAtLeastSevenDotZero());
+    MongoDatabase db = getDatabaseWithPostfix();
+    try (AutoCloseableSourceTask task = createSourceTask()) {
+      MongoCollection<Document> coll = db.getCollection("coll");
+      coll.drop();
+      db.createCollection(coll.getNamespace().getCollectionName(), new CreateCollectionOptions());
+      HashMap<String, String> cfg = new HashMap<>();
+      cfg.put(
+          MongoSourceConfig.OUTPUT_FORMAT_VALUE_CONFIG,
+          OutputFormat.SCHEMA.name().toLowerCase(Locale.ROOT));
+      task.start(cfg);
+      int id = 0;
+      Document expected = new Document("_id", id);
+      coll.insertOne(expected);
+      coll.updateOne(Filters.eq(id), Document.parse("{ $set: { foo: 1 } }"));
+      coll.deleteOne(Filters.eq(id));
+      List<SourceRecord> records = getNextResults(task);
+      assertEquals(3, records.size());
+      Struct update = (Struct) records.get(1).value();
+      assertEquals(OperationType.UPDATE.getValue(), update.getString("operationType"));
+      Struct updateDescription = (Struct) update.get("updateDescription");
+      assertNull(updateDescription.getString("disambiguatedPaths"));
+    } finally {
+      db.drop();
+    }
+  }
+
+  @Test
+  @DisplayName("Ensure truncatedArrays works")
+  void testTruncatedArrays() {
+    assumeTrue(isAtLeastSixDotZero());
+    MongoDatabase db = getDatabaseWithPostfix();
+    try (AutoCloseableSourceTask task = createSourceTask()) {
+      MongoCollection<Document> coll = db.getCollection("coll");
+      coll.drop();
+      db.createCollection(coll.getNamespace().getCollectionName(), new CreateCollectionOptions());
+      HashMap<String, String> cfg = new HashMap<>();
+      cfg.put(
+          MongoSourceConfig.OUTPUT_FORMAT_VALUE_CONFIG,
+          OutputFormat.SCHEMA.name().toLowerCase(Locale.ROOT));
+      task.start(cfg);
+      int id = 0;
+      Document expected =
+          new Document("_id", id)
+              .append("items", Arrays.asList(2, 30, 5, 10, 11, 100, 200, 250, 300, 5, 600));
+      coll.insertOne(expected);
+      coll.updateOne(
+          Filters.eq(id),
+          singletonList(Document.parse("{ $set: { items: [2,30,5,10,11,100,200,250,300,5] } }")));
+      coll.deleteOne(Filters.eq(id));
+      List<SourceRecord> records = getNextResults(task);
+      assertEquals(3, records.size());
+      Struct update = (Struct) records.get(1).value();
+      assertEquals(OperationType.UPDATE.getValue(), update.getString("operationType"));
+      Struct updateDescription = (Struct) update.get("updateDescription");
+
+      Schema schema =
+          SchemaBuilder.struct()
+              .name("truncatedArray")
+              .field("field", Schema.STRING_SCHEMA)
+              .field("newSize", Schema.INT32_SCHEMA)
+              .build();
+
+      Struct truncatedArrayStruct = new Struct(schema).put("field", "items").put("newSize", 10);
+
+      List<Struct> expectedTruncatedArray = new ArrayList<>();
+      expectedTruncatedArray.add(truncatedArrayStruct);
+      assertEquals(expectedTruncatedArray, updateDescription.getArray("truncatedArrays"));
     } finally {
       db.drop();
     }

@@ -2,6 +2,25 @@
 
 ## Changelog
 
+## 1.14.0+
+- See the [release notes](https://github.com/mongodb/mongo-kafka/releases)
+
+## 1.13.1
+
+### Bug Fixes
+  - [KAFKA-428](https://jira.mongodb.org/browse/KAFKA-428) Avoid unnecessary copy of data on restart
+
+## 1.13.0
+
+### Improvements
+- [KAFKA-404](https://jira.mongodb.org/browse/KAFKA-404) Support for extending MongoClient to allow for users to add custom auth such as AWS IAM / Assume Role.
+
+## 1.12.0
+
+### Improvements
+- [KAFKA-374](https://jira.mongodb.org/browse/KAFKA-374) Implement an error handler to address specific scenarios.
+
+
 ## 1.11.2
 
 ### Bug Fixes
