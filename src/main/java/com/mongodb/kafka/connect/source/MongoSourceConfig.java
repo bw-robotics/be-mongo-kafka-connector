@@ -35,6 +35,8 @@ import static com.mongodb.kafka.connect.util.Validators.emptyString;
 import static com.mongodb.kafka.connect.util.Validators.errorCheckingPasswordValueValidator;
 import static com.mongodb.kafka.connect.util.Validators.errorCheckingValueValidator;
 import static com.mongodb.kafka.connect.util.VisibleForTesting.AccessModifier.PACKAGE;
+import static com.mongodb.kafka.connect.util.custom.credentials.CustomCredentialProviderConstants.CUSTOM_AUTH_ENABLE_CONFIG;
+import static com.mongodb.kafka.connect.util.custom.credentials.CustomCredentialProviderGenericInitializer.initializeCustomProvider;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
@@ -78,6 +80,7 @@ import com.mongodb.kafka.connect.util.ConnectConfigException;
 import com.mongodb.kafka.connect.util.Validators;
 import com.mongodb.kafka.connect.util.VisibleForTesting;
 import com.mongodb.kafka.connect.util.config.BsonTimestampParser;
+import com.mongodb.kafka.connect.util.custom.credentials.CustomCredentialProvider;
 
 public class MongoSourceConfig extends AbstractConfig {
 
@@ -319,6 +322,21 @@ public class MongoSourceConfig extends AbstractConfig {
           + "the change occurred.\n"
           + "See https://www.mongodb.com/docs/manual/reference/method/db.collection.watch/ for more details and possible values.";
   private static final String FULL_DOCUMENT_DEFAULT = EMPTY_STRING;
+
+  public static final String SHOW_EXPANDED_EVENTS_CONFIG = "change.stream.show.expanded.events";
+  private static final String SHOW_EXPANDED_EVENTS_DISPLAY =
+      "The `showExpandedEvents` configuration.";
+  private static final String SHOW_EXPANDED_EVENTS_DOC =
+      "Determines if change streams notifies for DDL events, like the createIndexes and dropIndexes events.\n"
+          + "New in version 6.0.\n"
+          + "See https://www.mongodb.com/docs/manual/reference/change-events/#std-label-change-streams-expanded-events for more "
+          + "details on showExpandedEvents.\n"
+          + "This setting is required to show updateDescription.disambiguatedPaths in update events, "
+          + "helping clarify changes that involve ambiguous fields.\n"
+          + "New in version 6.1.\n"
+          + "See https://www.mongodb.com/docs/manual/reference/change-events/update/#path-disambiguation for more details on "
+          + "disambiguatedPaths.";
+  private static final boolean SHOW_EXPANDED_EVENTS_DEFAULT = false;
 
   public static final String COLLATION_CONFIG = "collation";
   private static final String COLLATION_DISPLAY = "The collation options";
@@ -583,6 +601,11 @@ public class MongoSourceConfig extends AbstractConfig {
           + "connection details will be used.";
 
   static final String PROVIDER_CONFIG = "provider";
+  private CustomCredentialProvider customCredentialProvider;
+
+  public CustomCredentialProvider getCustomCredentialProvider() {
+    return customCredentialProvider;
+  }
 
   public static final ConfigDef CONFIG = createConfigDef();
   private static final List<Consumer<MongoSourceConfig>> INITIALIZERS =
@@ -745,6 +768,9 @@ public class MongoSourceConfig extends AbstractConfig {
 
   public MongoSourceConfig(final Map<?, ?> originals) {
     this(originals, true);
+    if (Boolean.parseBoolean((String) originals.get(CUSTOM_AUTH_ENABLE_CONFIG))) {
+      customCredentialProvider = initializeCustomProvider(originals);
+    }
   }
 
   private MongoSourceConfig(final Map<?, ?> originals, final boolean validateAll) {
@@ -790,6 +816,10 @@ public class MongoSourceConfig extends AbstractConfig {
     } else {
       return fullDocumentFromString(getString(FULL_DOCUMENT_CONFIG));
     }
+  }
+
+  boolean getShowExpandedEvents() {
+    return getBoolean(SHOW_EXPANDED_EVENTS_CONFIG);
   }
 
   StartupConfig getStartupConfig() {
@@ -1080,6 +1110,17 @@ public class MongoSourceConfig extends AbstractConfig {
         Width.MEDIUM,
         FULL_DOCUMENT_DISPLAY,
         Validators.EnumValidatorAndRecommender.in(FullDocument.values(), FullDocument::getValue));
+
+    configDef.define(
+        SHOW_EXPANDED_EVENTS_CONFIG,
+        Type.BOOLEAN,
+        SHOW_EXPANDED_EVENTS_DEFAULT,
+        Importance.MEDIUM,
+        SHOW_EXPANDED_EVENTS_DOC,
+        group,
+        ++orderInGroup,
+        Width.MEDIUM,
+        SHOW_EXPANDED_EVENTS_DISPLAY);
 
     configDef.define(
         COLLATION_CONFIG,
