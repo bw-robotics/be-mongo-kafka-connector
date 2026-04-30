@@ -69,17 +69,20 @@ public class CustomDataTypeTopicMapper implements TopicMapper {
       final String operationType =
           changeStreamDocument.get(OPERATION_TYPE_FIELD).asString().getValue();
 
-      if (!INSERT_OPERATION_TYPE.equals(operationType)) {
         return getTopicName(collection);
-      }
 
-      final BsonDocument fullDocument = changeStreamDocument.get(FULL_DOCUMENT_FIELD).asDocument();
-      if (!fullDocument.containsKey(DATA_TYPE_FIELD)) {
-        return getTopicName(collection);
-      }
+        //TODO [MG] delete this code part after validation dataTyoe is not needed
+//      if (!INSERT_OPERATION_TYPE.equals(operationType)) {
+//        return getTopicName(collection);
+//      }
 
-      final String dataType = fullDocument.get(DATA_TYPE_FIELD).asString().getValue();
-      return getTopicName(dataType, collection);
+//      final BsonDocument fullDocument = changeStreamDocument.get(FULL_DOCUMENT_FIELD).asDocument();
+//      if (!fullDocument.containsKey(DATA_TYPE_FIELD)) {
+//        return getTopicName(collection);
+//      }
+
+//      final String dataType = fullDocument.get(DATA_TYPE_FIELD).asString().getValue();
+//      return getTopicName(dataType, collection);
     } catch (Exception e) {
       LOGGER.error(
           "Exception occurred while trying to get topic name for document: {}",
